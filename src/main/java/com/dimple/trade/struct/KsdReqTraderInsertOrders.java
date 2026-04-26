@@ -1,5 +1,6 @@
 package com.dimple.trade.struct;
 
+/** 下单请求。 */
 public class KsdReqTraderInsertOrders {
     public String localOrderNo;
     public String traderNo;

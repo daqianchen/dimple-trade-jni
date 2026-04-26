@@ -1,5 +1,6 @@
 package com.dimple.trade.struct;
 
+/** 资金/信用额度查询应答。 */
 public class KsdRspTraderQryMoney {
     public String currency;
     public String exchCode;

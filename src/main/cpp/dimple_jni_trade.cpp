@@ -7,6 +7,8 @@
 
 using std::string;
 
+// 由于 SDK 回调数据通常由底层线程持有，这里做一份堆内存拷贝，
+// 交给 JNI 工作线程异步消费，避免回调返回后出现悬空指针。
 template <typename T>
 static T* copyData(const T* source) {
     if (!source) {
@@ -19,6 +21,7 @@ static T* copyData(const T* source) {
     return dest;
 }
 
+// 兼容 Spring Boot fat jar 等类加载环境，优先从当前 Java 对象的 ClassLoader 中找类。
 static jclass loadClassInContext(JNIEnv* env, jobject apiInstance, const char* classNameWithSlash) {
     string classNameDots = classNameWithSlash;
     std::replace(classNameDots.begin(), classNameDots.end(), '/', '.');
@@ -58,6 +61,7 @@ static jclass loadClassInContext(JNIEnv* env, jobject apiInstance, const char* c
     return result;
 }
 
+// jstring -> std::string
 static string getJString(JNIEnv* env, jstring value) {
     if (!value) {
         return "";
@@ -70,6 +74,7 @@ static string getJString(JNIEnv* env, jstring value) {
     return result;
 }
 
+// 从 Java 对象中读取 String 字段。
 static string getObjectStringField(JNIEnv* env, jobject object, const char* name) {
     jclass cls = env->GetObjectClass(object);
     jfieldID field = env->GetFieldID(cls, name, "Ljava/lang/String;");
@@ -82,6 +87,7 @@ static string getObjectStringField(JNIEnv* env, jobject object, const char* name
     return result;
 }
 
+// 从 Java 对象中读取 int 字段。
 static jint getObjectIntField(JNIEnv* env, jobject object, const char* name) {
     jclass cls = env->GetObjectClass(object);
     jfieldID field = env->GetFieldID(cls, name, "I");
@@ -90,6 +96,7 @@ static jint getObjectIntField(JNIEnv* env, jobject object, const char* name) {
     return value;
 }
 
+// 从 Java 对象中读取 long 字段。
 static jlong getObjectLongField(JNIEnv* env, jobject object, const char* name) {
     jclass cls = env->GetObjectClass(object);
     jfieldID field = env->GetFieldID(cls, name, "J");
@@ -98,6 +105,7 @@ static jlong getObjectLongField(JNIEnv* env, jobject object, const char* name) {
     return value;
 }
 
+// 从 Java 对象中读取 double 字段。
 static jdouble getObjectDoubleField(JNIEnv* env, jobject object, const char* name) {
     jclass cls = env->GetObjectClass(object);
     jfieldID field = env->GetFieldID(cls, name, "D");
@@ -106,6 +114,7 @@ static jdouble getObjectDoubleField(JNIEnv* env, jobject object, const char* nam
     return value;
 }
 
+// 安全写入 C 风格字符数组，确保末尾有 0。
 static void copyToCharArray(char* target, size_t size, const string& value) {
     if (!target || size == 0) {
         return;
@@ -114,6 +123,7 @@ static void copyToCharArray(char* target, size_t size, const string& value) {
     strncpy(target, value.c_str(), size - 1);
 }
 
+// 统一给 Java 对象写 String 字段。
 static void setStringField(JNIEnv* env, jobject object, const char* name, const char* value) {
     jclass cls = env->GetObjectClass(object);
     jfieldID field = env->GetFieldID(cls, name, "Ljava/lang/String;");
@@ -123,6 +133,7 @@ static void setStringField(JNIEnv* env, jobject object, const char* name, const 
     env->DeleteLocalRef(cls);
 }
 
+// 统一给 Java 对象写 int 字段。
 static void setIntField(JNIEnv* env, jobject object, const char* name, jint value) {
     jclass cls = env->GetObjectClass(object);
     jfieldID field = env->GetFieldID(cls, name, "I");
@@ -130,6 +141,7 @@ static void setIntField(JNIEnv* env, jobject object, const char* name, jint valu
     env->DeleteLocalRef(cls);
 }
 
+// 统一给 Java 对象写 long 字段。
 static void setLongField(JNIEnv* env, jobject object, const char* name, jlong value) {
     jclass cls = env->GetObjectClass(object);
     jfieldID field = env->GetFieldID(cls, name, "J");
@@ -137,6 +149,7 @@ static void setLongField(JNIEnv* env, jobject object, const char* name, jlong va
     env->DeleteLocalRef(cls);
 }
 
+// 统一给 Java 对象写 double 字段。
 static void setDoubleField(JNIEnv* env, jobject object, const char* name, jdouble value) {
     jclass cls = env->GetObjectClass(object);
     jfieldID field = env->GetFieldID(cls, name, "D");
@@ -144,6 +157,7 @@ static void setDoubleField(JNIEnv* env, jobject object, const char* name, jdoubl
     env->DeleteLocalRef(cls);
 }
 
+// 通过默认无参构造创建 Java DTO。
 static jobject newObject(JNIEnv* env, jobject apiInstance, const char* className) {
     jclass cls = loadClassInContext(env, apiInstance, className);
     if (!cls) {
@@ -155,6 +169,7 @@ static jobject newObject(JNIEnv* env, jobject apiInstance, const char* className
     return obj;
 }
 
+// C++ 的响应错误结构 -> Java KsdRspInfo
 static jobject makeRspInfo(JNIEnv* env, jobject apiInstance, const CKSD_RspInfoField* info) {
     if (!info) {
         return nullptr;
@@ -173,11 +188,13 @@ JniTradeApi::JniTradeApi(JavaVM* jvm, jobject javaObj)
         : api_(nullptr), jvm_(jvm), javaObj_(nullptr), worker_(nullptr), active_(false) {
     JNIEnv* env = nullptr;
     if (jvm_->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK) {
+        // 保存 Java API 对象的全局引用，避免被 GC 回收。
         javaObj_ = env->NewGlobalRef(javaObj);
     }
 }
 
 JniTradeApi::~JniTradeApi() {
+    // 析构时先停工作线程，再释放 Java 全局引用。
     stopThread();
     JNIEnv* env = nullptr;
     bool attached = false;
@@ -197,6 +214,7 @@ JniTradeApi::~JniTradeApi() {
 void JniTradeApi::createApi() {
     api_ = CKSDTradeApi::CreateKSDTradeApi();
     if (api_) {
+        // 创建成功后立即注册 SPI，并启动专门的 JNI 事件派发线程。
         api_->RegisterSpi(this);
         startThread();
     }
@@ -272,6 +290,7 @@ int JniTradeApi::reqTraderQuitOrder(unsigned int* seqNo, CKSD_ReqTraderQuitOrder
 void JniTradeApi::startThread() {
     if (!worker_) {
         active_ = true;
+        // 所有 Java 回调都统一在这个线程里执行，避免直接在 SDK 回调线程里碰 JNI。
         worker_ = new std::thread(&JniTradeApi::processTask, this);
     }
 }
@@ -279,6 +298,7 @@ void JniTradeApi::startThread() {
 void JniTradeApi::stopThread() {
     if (worker_) {
         active_ = false;
+        // 投递退出任务，让工作线程以同一流程安全退出。
         Task task = {TASK_EXIT, nullptr, nullptr, 0, false};
         queue_.push(task);
         worker_->join();
@@ -288,6 +308,7 @@ void JniTradeApi::stopThread() {
 }
 
 void JniTradeApi::OnFrontConnected() {
+    // SDK 线程只负责投递任务，不直接回调 Java。
     Task task = {TASK_FRONT_CONNECTED, nullptr, nullptr, 0, false};
     queue_.push(task);
 }
@@ -349,6 +370,7 @@ void JniTradeApi::OnNtyTraderMatch(unsigned int seqNo, const CKSD_NtyTraderMatch
 
 void JniTradeApi::processTask() {
     JNIEnv* env = nullptr;
+    // 工作线程需要显式附着到 JVM，才能安全使用 JNI。
     jvm_->AttachCurrentThread(reinterpret_cast<void**>(&env), nullptr);
     jclass apiClass = env->GetObjectClass(javaObj_);
 
@@ -372,6 +394,7 @@ void JniTradeApi::processTask() {
             break;
         }
 
+        // 绝大多数应答都带错误对象，统一在这里先转换出来。
         jobject errorObj = makeRspInfo(env, javaObj_, static_cast<CKSD_RspInfoField*>(task.error));
 
         switch (task.type) {
@@ -385,6 +408,7 @@ void JniTradeApi::processTask() {
                 env->CallVoidMethod(javaObj_, midKickOff);
                 break;
             case TASK_RSP_LOGIN: {
+                // 登录应答：把 C++ 结构体映射到 Java DTO，再分发给业务层。
                 CKSD_RspTradeLoginField* data = static_cast<CKSD_RspTradeLoginField*>(task.data);
                 jobject obj = newObject(env, javaObj_, "com/dimple/trade/struct/KsdRspTradeLogin");
                 if (obj && data) {
@@ -413,6 +437,7 @@ void JniTradeApi::processTask() {
                 break;
             }
             case TASK_RSP_QRY_POSI: {
+                // 持仓查询是典型的多条回包场景，因此保留 seqNo 和 isLast。
                 CKSD_RspTraderQryPosi* data = static_cast<CKSD_RspTraderQryPosi*>(task.data);
                 jobject obj = newObject(env, javaObj_, "com/dimple/trade/struct/KsdRspTraderQryPosi");
                 if (obj && data) {
@@ -488,6 +513,7 @@ void JniTradeApi::processTask() {
             }
             case TASK_RSP_INSERT_ORDER:
             {
+                // 下单应答是“请求是否被接受”，真正的订单状态以后续回报为准。
                 CKSD_RspTraderInsertOrders* data = static_cast<CKSD_RspTraderInsertOrders*>(task.data);
                 jobject obj = newObject(env, javaObj_, "com/dimple/trade/struct/KsdRspTraderInsertOrders");
                 if (obj && data) {
@@ -513,6 +539,7 @@ void JniTradeApi::processTask() {
                 break;
             }
             case TASK_RTN_INSERT_ORDER: {
+                // 委托回报反映订单真实流转状态。
                 CKSD_RtnTraderInsertOrders* data = static_cast<CKSD_RtnTraderInsertOrders*>(task.data);
                 jobject obj = newObject(env, javaObj_, "com/dimple/trade/struct/KsdRtnTraderInsertOrders");
                 if (obj && data) {
@@ -565,6 +592,7 @@ void JniTradeApi::processTask() {
                 break;
             }
             case TASK_NTY_TRADER_MATCH: {
+                // 成交通知为异步推送，没有错误对象。
                 CKSD_NtyTraderMatch* data = static_cast<CKSD_NtyTraderMatch*>(task.data);
                 jobject obj = newObject(env, javaObj_, "com/dimple/trade/struct/KsdNtyTraderMatch");
                 if (obj && data) {
@@ -603,9 +631,11 @@ void JniTradeApi::processTask() {
     }
 
     env->DeleteLocalRef(apiClass);
+    // 线程退出前必须从 JVM 解附。
     jvm_->DetachCurrentThread();
 }
 
+// 单例式持有 JNI 桥对象，保持与 Java 侧使用方式一致。
 static JniTradeApi* g_api = nullptr;
 
 extern "C" {
@@ -619,6 +649,7 @@ JNIEXPORT void JNICALL Java_com_dimple_trade_KsdTradeApi_createKSDTradeApi(JNIEn
     g_api->createApi();
 }
 
+// 以下导出函数负责把 Java 请求对象拆成 C 结构体，再转调到底层交易 API。
 JNIEXPORT jint JNICALL Java_com_dimple_trade_KsdTradeApi_registerServer(JNIEnv* env, jobject, jstring ip, jint port) {
     if (!g_api) {
         return -1;

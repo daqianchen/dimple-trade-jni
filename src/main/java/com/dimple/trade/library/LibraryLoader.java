@@ -6,6 +6,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 
+/**
+ * 从 jar 或外部目录中提取并加载本地依赖库。
+ * 所有中文注释统一按 UTF-8 保存，避免后续出现乱码。
+ */
 public final class LibraryLoader {
 
     private static volatile boolean loaded;
@@ -13,6 +17,7 @@ public final class LibraryLoader {
     private LibraryLoader() {
     }
 
+    /** 只加载一次本地库，避免重复 System.load。 */
     public static synchronized void load() {
         if (loaded) {
             return;
@@ -36,6 +41,7 @@ public final class LibraryLoader {
         }
     }
 
+    /** Windows 下依次加载加密库、交易库、JNI 桥接库。 */
     private static void loadWindows(File nativeDir) throws IOException {
         File crypto = extractOrResolve(nativeDir, "cryptopp.dll", "/win-x64/cryptopp.dll", false);
         File trade = extractOrResolve(nativeDir, "KSDTradeApi.dll", "/win-x64/KSDTradeApi.dll", false);
@@ -46,6 +52,7 @@ public final class LibraryLoader {
         System.load(jni.getAbsolutePath());
     }
 
+    /** Linux 下在加载前补执行权限，避免 so 无法装载。 */
     private static void loadLinux(File nativeDir) throws IOException, InterruptedException {
         File crypto = extractOrResolve(nativeDir, "libcryptopp64.so", "/linux-x64/libcryptopp64.so", false);
         File trade = extractOrResolve(nativeDir, "libKSDTradeApi64.so", "/linux-x64/libKSDTradeApi64.so", false);
@@ -60,6 +67,7 @@ public final class LibraryLoader {
         System.load(jni.getAbsolutePath());
     }
 
+    /** 优先使用外部指定目录，否则在当前工作目录下创建默认释放目录。 */
     private static File resolveNativeDir() {
         String configured = System.getProperty("dimple.trade.native.dir");
         File nativeDir = configured == null || configured.trim().isEmpty()
@@ -72,6 +80,7 @@ public final class LibraryLoader {
         return nativeDir;
     }
 
+    /** 如果目标文件不存在，则从 jar 资源中提取。 */
     private static File extractOrResolve(File dir, String fileName, String resourcePath, boolean required) throws IOException {
         File preferred = new File(dir, fileName);
         if (preferred.exists() && preferred.length() > 0) {
@@ -97,6 +106,7 @@ public final class LibraryLoader {
         return preferred;
     }
 
+    /** Linux/Unix 平台下补充可执行权限。 */
     private static void chmodIfNeeded(File file) throws IOException, InterruptedException {
         String os = System.getProperty("os.name", "").toLowerCase();
         if (!(os.contains("nix") || os.contains("nux") || os.contains("aix"))) {

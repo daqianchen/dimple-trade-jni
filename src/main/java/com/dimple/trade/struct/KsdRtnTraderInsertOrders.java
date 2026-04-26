@@ -1,5 +1,6 @@
 package com.dimple.trade.struct;
 
+/** 委托回报。 */
 public class KsdRtnTraderInsertOrders {
     public String sysOrderNo;
     public String localOrderNo;

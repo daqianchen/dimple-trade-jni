@@ -1,5 +1,6 @@
 package com.dimple.trade.struct;
 
+/** 撤单应答。 */
 public class KsdRspTraderQuitOrder {
     public String traderNo;
     public String memberID;

@@ -1,5 +1,6 @@
 package com.dimple.trade.struct;
 
+/** 成交通知。 */
 public class KsdNtyTraderMatch {
     public String contractID;
     public String exchCode;

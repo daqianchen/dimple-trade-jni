@@ -1,5 +1,6 @@
 package com.dimple.trade.struct;
 
+/** 持仓查询应答。 */
 public class KsdRspTraderQryPosi {
     public String memberID;
     public String clientID;

@@ -1,5 +1,6 @@
 package com.dimple.trade.struct;
 
+/** 委托汇总查询应答。 */
 public class KsdRspOrderAllQry {
     public String memberID;
     public String clientID;
