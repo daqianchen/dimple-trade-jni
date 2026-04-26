@@ -1,0 +1,779 @@
+#include "dimple_jni_trade.h"
+
+#include <algorithm>
+#include <cstdlib>
+#include <iostream>
+#include <string>
+
+using std::string;
+
+template <typename T>
+static T* copyData(const T* source) {
+    if (!source) {
+        return nullptr;
+    }
+    T* dest = static_cast<T*>(malloc(sizeof(T)));
+    if (dest) {
+        memcpy(dest, source, sizeof(T));
+    }
+    return dest;
+}
+
+static jclass loadClassInContext(JNIEnv* env, jobject apiInstance, const char* classNameWithSlash) {
+    string classNameDots = classNameWithSlash;
+    std::replace(classNameDots.begin(), classNameDots.end(), '/', '.');
+
+    jclass apiClass = env->GetObjectClass(apiInstance);
+    jclass classClass = env->FindClass("java/lang/Class");
+    jmethodID getClassLoader = env->GetMethodID(classClass, "getClassLoader", "()Ljava/lang/ClassLoader;");
+    jobject classLoader = env->CallObjectMethod(apiClass, getClassLoader);
+
+    jclass result = nullptr;
+    if (classLoader) {
+        jclass classLoaderClass = env->FindClass("java/lang/ClassLoader");
+        jmethodID loadClass = env->GetMethodID(classLoaderClass, "loadClass", "(Ljava/lang/String;)Ljava/lang/Class;");
+        jstring className = env->NewStringUTF(classNameDots.c_str());
+        result = static_cast<jclass>(env->CallObjectMethod(classLoader, loadClass, className));
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            result = nullptr;
+        }
+        env->DeleteLocalRef(className);
+        env->DeleteLocalRef(classLoaderClass);
+    }
+
+    if (!result) {
+        result = env->FindClass(classNameWithSlash);
+        if (env->ExceptionCheck()) {
+            env->ExceptionClear();
+            result = nullptr;
+        }
+    }
+
+    env->DeleteLocalRef(apiClass);
+    env->DeleteLocalRef(classClass);
+    if (classLoader) {
+        env->DeleteLocalRef(classLoader);
+    }
+    return result;
+}
+
+static string getJString(JNIEnv* env, jstring value) {
+    if (!value) {
+        return "";
+    }
+    const char* chars = env->GetStringUTFChars(value, nullptr);
+    string result = chars ? chars : "";
+    if (chars) {
+        env->ReleaseStringUTFChars(value, chars);
+    }
+    return result;
+}
+
+static string getObjectStringField(JNIEnv* env, jobject object, const char* name) {
+    jclass cls = env->GetObjectClass(object);
+    jfieldID field = env->GetFieldID(cls, name, "Ljava/lang/String;");
+    jstring value = static_cast<jstring>(env->GetObjectField(object, field));
+    string result = getJString(env, value);
+    if (value) {
+        env->DeleteLocalRef(value);
+    }
+    env->DeleteLocalRef(cls);
+    return result;
+}
+
+static jint getObjectIntField(JNIEnv* env, jobject object, const char* name) {
+    jclass cls = env->GetObjectClass(object);
+    jfieldID field = env->GetFieldID(cls, name, "I");
+    jint value = env->GetIntField(object, field);
+    env->DeleteLocalRef(cls);
+    return value;
+}
+
+static jlong getObjectLongField(JNIEnv* env, jobject object, const char* name) {
+    jclass cls = env->GetObjectClass(object);
+    jfieldID field = env->GetFieldID(cls, name, "J");
+    jlong value = env->GetLongField(object, field);
+    env->DeleteLocalRef(cls);
+    return value;
+}
+
+static jdouble getObjectDoubleField(JNIEnv* env, jobject object, const char* name) {
+    jclass cls = env->GetObjectClass(object);
+    jfieldID field = env->GetFieldID(cls, name, "D");
+    jdouble value = env->GetDoubleField(object, field);
+    env->DeleteLocalRef(cls);
+    return value;
+}
+
+static void copyToCharArray(char* target, size_t size, const string& value) {
+    if (!target || size == 0) {
+        return;
+    }
+    memset(target, 0, size);
+    strncpy(target, value.c_str(), size - 1);
+}
+
+static void setStringField(JNIEnv* env, jobject object, const char* name, const char* value) {
+    jclass cls = env->GetObjectClass(object);
+    jfieldID field = env->GetFieldID(cls, name, "Ljava/lang/String;");
+    jstring text = env->NewStringUTF(value ? value : "");
+    env->SetObjectField(object, field, text);
+    env->DeleteLocalRef(text);
+    env->DeleteLocalRef(cls);
+}
+
+static void setIntField(JNIEnv* env, jobject object, const char* name, jint value) {
+    jclass cls = env->GetObjectClass(object);
+    jfieldID field = env->GetFieldID(cls, name, "I");
+    env->SetIntField(object, field, value);
+    env->DeleteLocalRef(cls);
+}
+
+static void setLongField(JNIEnv* env, jobject object, const char* name, jlong value) {
+    jclass cls = env->GetObjectClass(object);
+    jfieldID field = env->GetFieldID(cls, name, "J");
+    env->SetLongField(object, field, value);
+    env->DeleteLocalRef(cls);
+}
+
+static void setDoubleField(JNIEnv* env, jobject object, const char* name, jdouble value) {
+    jclass cls = env->GetObjectClass(object);
+    jfieldID field = env->GetFieldID(cls, name, "D");
+    env->SetDoubleField(object, field, value);
+    env->DeleteLocalRef(cls);
+}
+
+static jobject newObject(JNIEnv* env, jobject apiInstance, const char* className) {
+    jclass cls = loadClassInContext(env, apiInstance, className);
+    if (!cls) {
+        return nullptr;
+    }
+    jmethodID ctor = env->GetMethodID(cls, "<init>", "()V");
+    jobject obj = env->NewObject(cls, ctor);
+    env->DeleteLocalRef(cls);
+    return obj;
+}
+
+static jobject makeRspInfo(JNIEnv* env, jobject apiInstance, const CKSD_RspInfoField* info) {
+    if (!info) {
+        return nullptr;
+    }
+    jobject obj = newObject(env, apiInstance, "com/dimple/trade/struct/KsdRspInfo");
+    if (!obj) {
+        return nullptr;
+    }
+    setIntField(env, obj, "errorID", info->ErrCode);
+    setStringField(env, obj, "errorMsg", info->RspMsg);
+    setStringField(env, obj, "timeStamp", info->TimeStamp);
+    return obj;
+}
+
+JniTradeApi::JniTradeApi(JavaVM* jvm, jobject javaObj)
+        : api_(nullptr), jvm_(jvm), javaObj_(nullptr), worker_(nullptr), active_(false) {
+    JNIEnv* env = nullptr;
+    if (jvm_->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) == JNI_OK) {
+        javaObj_ = env->NewGlobalRef(javaObj);
+    }
+}
+
+JniTradeApi::~JniTradeApi() {
+    stopThread();
+    JNIEnv* env = nullptr;
+    bool attached = false;
+    if (jvm_->GetEnv(reinterpret_cast<void**>(&env), JNI_VERSION_1_6) != JNI_OK) {
+        jvm_->AttachCurrentThread(reinterpret_cast<void**>(&env), nullptr);
+        attached = true;
+    }
+    if (javaObj_) {
+        env->DeleteGlobalRef(javaObj_);
+        javaObj_ = nullptr;
+    }
+    if (attached) {
+        jvm_->DetachCurrentThread();
+    }
+}
+
+void JniTradeApi::createApi() {
+    api_ = CKSDTradeApi::CreateKSDTradeApi();
+    if (api_) {
+        api_->RegisterSpi(this);
+        startThread();
+    }
+}
+
+void JniTradeApi::init() {
+    if (api_) {
+        api_->Init(true);
+    }
+}
+
+void JniTradeApi::release() {
+    if (api_) {
+        api_->Release();
+        api_ = nullptr;
+    }
+}
+
+void JniTradeApi::join() {
+    if (api_) {
+        api_->Join();
+    }
+}
+
+int JniTradeApi::registerServer(char* ip, int port) {
+    if (!api_) {
+        return -1;
+    }
+    api_->RegisterServer(ip, port);
+    return 0;
+}
+
+int JniTradeApi::subscribePrivateFlow() {
+    return api_ ? api_->SubscribePrivateFlow(false) : -1;
+}
+
+int JniTradeApi::subscribePublicFlow() {
+    return api_ ? api_->SubscribePublicFlow(false) : -1;
+}
+
+int JniTradeApi::reqTraderLogin(CKSD_ReqTradeLoginField* req) {
+    return api_ ? api_->ReqTraderLogin(req) : -1;
+}
+
+int JniTradeApi::reqTraderEncLogin(CKSD_ReqEncTradeLoginField* req) {
+    return api_ ? api_->ReqTraderEncLogin(req) : -1;
+}
+
+int JniTradeApi::reqTraderLogout(CKSD_ReqTradeLogoutField* req) {
+    return api_ ? api_->ReqTraderLogout(req) : -1;
+}
+
+int JniTradeApi::reqTraderQryPosi(unsigned int* seqNo, CKSD_ReqTraderQryPosi* req) {
+    return api_ ? api_->ReqTraderQryPosi(seqNo, req) : -1;
+}
+
+int JniTradeApi::reqTraderQryMoney(unsigned int* seqNo, CKSD_ReqTraderQryMoney* req) {
+    return api_ ? api_->ReqTraderQryMoney(seqNo, req) : -1;
+}
+
+int JniTradeApi::reqOrderAllQry(unsigned int* seqNo, CKSD_ReqOrderAllQry* req) {
+    return api_ ? api_->ReqOrderAllQry(seqNo, req) : -1;
+}
+
+int JniTradeApi::reqTraderInsertOrders(unsigned int* seqNo, CKSD_ReqTraderInsertOrders* req) {
+    return api_ ? api_->ReqTraderInsertOrders(seqNo, req) : -1;
+}
+
+int JniTradeApi::reqTraderQuitOrder(unsigned int* seqNo, CKSD_ReqTraderQuitOrder* req) {
+    return api_ ? api_->ReqTraderQuitOrder(seqNo, req) : -1;
+}
+
+void JniTradeApi::startThread() {
+    if (!worker_) {
+        active_ = true;
+        worker_ = new std::thread(&JniTradeApi::processTask, this);
+    }
+}
+
+void JniTradeApi::stopThread() {
+    if (worker_) {
+        active_ = false;
+        Task task = {TASK_EXIT, nullptr, nullptr, 0, false};
+        queue_.push(task);
+        worker_->join();
+        delete worker_;
+        worker_ = nullptr;
+    }
+}
+
+void JniTradeApi::OnFrontConnected() {
+    Task task = {TASK_FRONT_CONNECTED, nullptr, nullptr, 0, false};
+    queue_.push(task);
+}
+
+void JniTradeApi::OnFrontDisconnected() {
+    Task task = {TASK_FRONT_DISCONNECTED, nullptr, nullptr, 0, false};
+    queue_.push(task);
+}
+
+void JniTradeApi::OnKickOff() {
+    Task task = {TASK_KICK_OFF, nullptr, nullptr, 0, false};
+    queue_.push(task);
+}
+
+void JniTradeApi::OnRspTraderLogin(const CKSD_RspInfoField* rspInfo, const CKSD_RspTradeLoginField* data, bool isLast) {
+    Task task = {TASK_RSP_LOGIN, copyData(data), copyData(rspInfo), 0, isLast};
+    queue_.push(task);
+}
+
+void JniTradeApi::OnRspTraderLogout(const CKSD_RspInfoField* rspInfo, const CKSD_RspTradeLogoutField* data, bool isLast) {
+    Task task = {TASK_RSP_LOGOUT, copyData(data), copyData(rspInfo), 0, isLast};
+    queue_.push(task);
+}
+
+void JniTradeApi::OnRspTraderQryPosi(unsigned int seqNo, const CKSD_RspInfoField* rspInfo, const CKSD_RspTraderQryPosi* data, bool isLast) {
+    Task task = {TASK_RSP_QRY_POSI, copyData(data), copyData(rspInfo), seqNo, isLast};
+    queue_.push(task);
+}
+
+void JniTradeApi::OnRspTraderQryMoney(unsigned int seqNo, const CKSD_RspInfoField* rspInfo, const CKSD_RspTraderQryMoney* data, bool isLast) {
+    Task task = {TASK_RSP_QRY_MONEY, copyData(data), copyData(rspInfo), seqNo, isLast};
+    queue_.push(task);
+}
+
+void JniTradeApi::OnRspOrderAllQry(unsigned int seqNo, const CKSD_RspInfoField* rspInfo, const CKSD_RspOrderAllQry* data, bool isLast) {
+    Task task = {TASK_RSP_ORDER_ALL, copyData(data), copyData(rspInfo), seqNo, isLast};
+    queue_.push(task);
+}
+
+void JniTradeApi::OnRspTraderInsertOrders(unsigned int seqNo, const CKSD_RspInfoField* rspInfo, const CKSD_RspTraderInsertOrders* data, bool isLast) {
+    Task task = {TASK_RSP_INSERT_ORDER, copyData(data), copyData(rspInfo), seqNo, isLast};
+    queue_.push(task);
+}
+
+void JniTradeApi::OnRtnTraderInsertOrders(unsigned int seqNo, const CKSD_RspInfoField* rspInfo, const CKSD_RtnTraderInsertOrders* data, bool isLast) {
+    Task task = {TASK_RTN_INSERT_ORDER, copyData(data), copyData(rspInfo), seqNo, isLast};
+    queue_.push(task);
+}
+
+void JniTradeApi::OnRspTraderQuitOrder(unsigned int seqNo, const CKSD_RspInfoField* rspInfo, const CKSD_RspTraderQuitOrder* data, bool isLast) {
+    Task task = {TASK_RSP_QUIT_ORDER, copyData(data), copyData(rspInfo), seqNo, isLast};
+    queue_.push(task);
+}
+
+void JniTradeApi::OnNtyTraderMatch(unsigned int seqNo, const CKSD_NtyTraderMatch* data, bool isLast) {
+    Task task = {TASK_NTY_TRADER_MATCH, copyData(data), nullptr, seqNo, isLast};
+    queue_.push(task);
+}
+
+void JniTradeApi::processTask() {
+    JNIEnv* env = nullptr;
+    jvm_->AttachCurrentThread(reinterpret_cast<void**>(&env), nullptr);
+    jclass apiClass = env->GetObjectClass(javaObj_);
+
+    jmethodID midFrontConnected = env->GetMethodID(apiClass, "onFrontConnected", "()V");
+    jmethodID midFrontDisconnected = env->GetMethodID(apiClass, "onFrontDisconnected", "()V");
+    jmethodID midKickOff = env->GetMethodID(apiClass, "onKickOff", "()V");
+    jmethodID midRspTraderLogin = env->GetMethodID(apiClass, "onRspTraderLogin", "(Lcom/dimple/trade/struct/KsdRspTradeLogin;Lcom/dimple/trade/struct/KsdRspInfo;Z)V");
+    jmethodID midRspTraderLogout = env->GetMethodID(apiClass, "onRspTraderLogout", "(Lcom/dimple/trade/struct/KsdRspTradeLogout;Lcom/dimple/trade/struct/KsdRspInfo;Z)V");
+    jmethodID midRspTraderQryPosi = env->GetMethodID(apiClass, "onRspTraderQryPosi", "(ILcom/dimple/trade/struct/KsdRspTraderQryPosi;Lcom/dimple/trade/struct/KsdRspInfo;Z)V");
+    jmethodID midRspTraderQryMoney = env->GetMethodID(apiClass, "onRspTraderQryMoney", "(ILcom/dimple/trade/struct/KsdRspTraderQryMoney;Lcom/dimple/trade/struct/KsdRspInfo;Z)V");
+    jmethodID midRspOrderAllQry = env->GetMethodID(apiClass, "onRspOrderAllQry", "(ILcom/dimple/trade/struct/KsdRspOrderAllQry;Lcom/dimple/trade/struct/KsdRspInfo;Z)V");
+    jmethodID midRspTraderInsertOrders = env->GetMethodID(apiClass, "onRspTraderInsertOrders", "(ILcom/dimple/trade/struct/KsdRspTraderInsertOrders;Lcom/dimple/trade/struct/KsdRspInfo;Z)V");
+    jmethodID midRtnTraderInsertOrders = env->GetMethodID(apiClass, "onRtnTraderInsertOrders", "(ILcom/dimple/trade/struct/KsdRtnTraderInsertOrders;Lcom/dimple/trade/struct/KsdRspInfo;Z)V");
+    jmethodID midRspTraderQuitOrder = env->GetMethodID(apiClass, "onRspTraderQuitOrder", "(ILcom/dimple/trade/struct/KsdRspTraderQuitOrder;Lcom/dimple/trade/struct/KsdRspInfo;Z)V");
+    jmethodID midNtyTraderMatch = env->GetMethodID(apiClass, "onNtyTraderMatch", "(ILcom/dimple/trade/struct/KsdNtyTraderMatch;Z)V");
+
+    while (true) {
+        Task task = queue_.waitAndPop();
+        if (task.type == TASK_EXIT) {
+            task.clear();
+            break;
+        }
+
+        jobject errorObj = makeRspInfo(env, javaObj_, static_cast<CKSD_RspInfoField*>(task.error));
+
+        switch (task.type) {
+            case TASK_FRONT_CONNECTED:
+                env->CallVoidMethod(javaObj_, midFrontConnected);
+                break;
+            case TASK_FRONT_DISCONNECTED:
+                env->CallVoidMethod(javaObj_, midFrontDisconnected);
+                break;
+            case TASK_KICK_OFF:
+                env->CallVoidMethod(javaObj_, midKickOff);
+                break;
+            case TASK_RSP_LOGIN: {
+                CKSD_RspTradeLoginField* data = static_cast<CKSD_RspTradeLoginField*>(task.data);
+                jobject obj = newObject(env, javaObj_, "com/dimple/trade/struct/KsdRspTradeLogin");
+                if (obj && data) {
+                    setStringField(env, obj, "memberID", data->MemberID);
+                    setStringField(env, obj, "traderNo", data->TraderNo);
+                    setStringField(env, obj, "loginTime", data->Time);
+                    setStringField(env, obj, "tradingDay", data->Date);
+                    setStringField(env, obj, "latestOrderNo", data->LatestOrderNo);
+                    setStringField(env, obj, "latestQuoteOrderNo", data->LatestQuoteOrderNo);
+                    setStringField(env, obj, "latestQuoteOrderBatchNo", data->LatestQuoteOrderBatchNo);
+                    setIntField(env, obj, "isPwdExpirePrompt", data->IsPwdExpirePrompt);
+                    setIntField(env, obj, "expireDays", static_cast<jint>(data->ExpireDays));
+                }
+                env->CallVoidMethod(javaObj_, midRspTraderLogin, obj, errorObj, task.isLast);
+                if (obj) env->DeleteLocalRef(obj);
+                break;
+            }
+            case TASK_RSP_LOGOUT: {
+                CKSD_RspTradeLogoutField* data = static_cast<CKSD_RspTradeLogoutField*>(task.data);
+                jobject obj = newObject(env, javaObj_, "com/dimple/trade/struct/KsdRspTradeLogout");
+                if (obj && data) {
+                    setStringField(env, obj, "traderNo", data->TraderNo);
+                }
+                env->CallVoidMethod(javaObj_, midRspTraderLogout, obj, errorObj, task.isLast);
+                if (obj) env->DeleteLocalRef(obj);
+                break;
+            }
+            case TASK_RSP_QRY_POSI: {
+                CKSD_RspTraderQryPosi* data = static_cast<CKSD_RspTraderQryPosi*>(task.data);
+                jobject obj = newObject(env, javaObj_, "com/dimple/trade/struct/KsdRspTraderQryPosi");
+                if (obj && data) {
+                    setStringField(env, obj, "memberID", data->MemberID);
+                    setStringField(env, obj, "clientID", data->ClientID);
+                    setStringField(env, obj, "traderNo", data->TraderNo);
+                    setStringField(env, obj, "contractID", data->ContractID);
+                    setStringField(env, obj, "shFlag", string(1, data->ShFlag).c_str());
+                    setLongField(env, obj, "lastBuyQty", data->LastBuyQty);
+                    setLongField(env, obj, "lastSellQty", data->LastSellQty);
+                    setLongField(env, obj, "todayBuyQty", data->TodayBuyQty);
+                    setLongField(env, obj, "todaySellQty", data->TodaySellQty);
+                    setLongField(env, obj, "buyQty", data->BuyQty);
+                    setLongField(env, obj, "sellQty", data->SellQty);
+                    setDoubleField(env, obj, "buyAmt", data->BuyAmt);
+                    setDoubleField(env, obj, "sellAmt", data->SellAmt);
+                    setLongField(env, obj, "buyOpenQty", data->BuyOpenQty);
+                    setLongField(env, obj, "sellOpenQty", data->SellOpenQty);
+                    setLongField(env, obj, "buyOffsetQty", data->BuyOffsetQty);
+                    setLongField(env, obj, "sellOffsetQty", data->SellOffsetQty);
+                    setLongField(env, obj, "buyOffsetTodayFrozenQty", data->BuyOffsetTodayFrozenQty);
+                    setLongField(env, obj, "sellOffsetTodayFrozenQty", data->SellOffsetTodayFrozenQty);
+                    setLongField(env, obj, "buyOffsetLastFrozenQty", data->BuyOffsetLastFrozenQty);
+                    setLongField(env, obj, "sellOffsetLastFrozenQty", data->SellOffsetLastFrozenQty);
+                    setStringField(env, obj, "actArbiContractID", data->ActArbiContractID);
+                    setStringField(env, obj, "tradePurpose", data->TradePurpose);
+                }
+                env->CallVoidMethod(javaObj_, midRspTraderQryPosi, static_cast<jint>(task.seqNo), obj, errorObj, task.isLast);
+                if (obj) env->DeleteLocalRef(obj);
+                break;
+            }
+            case TASK_RSP_QRY_MONEY: {
+                CKSD_RspTraderQryMoney* data = static_cast<CKSD_RspTraderQryMoney*>(task.data);
+                jobject obj = newObject(env, javaObj_, "com/dimple/trade/struct/KsdRspTraderQryMoney");
+                if (obj && data) {
+                    setStringField(env, obj, "currency", data->Currency);
+                    setStringField(env, obj, "exchCode", data->ExchCode);
+                    setStringField(env, obj, "memberID", data->MemberID);
+                    setStringField(env, obj, "traderNo", data->TraderNo);
+                    setDoubleField(env, obj, "creditTot", data->CreditTot);
+                    setDoubleField(env, obj, "creditUsed", data->CreditUsed);
+                    setDoubleField(env, obj, "creditFrozen", data->CreditFrozen);
+                    setDoubleField(env, obj, "creditRemain", data->CreditRemain);
+                    setDoubleField(env, obj, "floatProfitLoss", data->FloatProfitLoss);
+                    setDoubleField(env, obj, "offsetProfitLoss", data->OffsetProfitLoss);
+                }
+                env->CallVoidMethod(javaObj_, midRspTraderQryMoney, static_cast<jint>(task.seqNo), obj, errorObj, task.isLast);
+                if (obj) env->DeleteLocalRef(obj);
+                break;
+            }
+            case TASK_RSP_ORDER_ALL: {
+                CKSD_RspOrderAllQry* data = static_cast<CKSD_RspOrderAllQry*>(task.data);
+                jobject obj = newObject(env, javaObj_, "com/dimple/trade/struct/KsdRspOrderAllQry");
+                if (obj && data) {
+                    setStringField(env, obj, "memberID", data->MemberID);
+                    setStringField(env, obj, "clientID", data->ClientID);
+                    setStringField(env, obj, "traderNo", data->TraderNo);
+                    setStringField(env, obj, "actArbiContractId", data->ActArbiContractId);
+                    setStringField(env, obj, "contractID", data->ContractID);
+                    setStringField(env, obj, "bsFlag", string(1, data->BsFlag).c_str());
+                    setStringField(env, obj, "shFlag", string(1, data->ShFlag).c_str());
+                    setLongField(env, obj, "qty", data->Qty);
+                    setLongField(env, obj, "offsetQty", data->OffsetQty);
+                    setLongField(env, obj, "offsetLastQty", data->OffsetLastQty);
+                    setLongField(env, obj, "offsetTodayQty", data->OffsetTodayQty);
+                    setDoubleField(env, obj, "avePrice", data->AvePrice);
+                    setDoubleField(env, obj, "price", data->Price);
+                    setStringField(env, obj, "tradePurpose", data->TradePurpose);
+                }
+                env->CallVoidMethod(javaObj_, midRspOrderAllQry, static_cast<jint>(task.seqNo), obj, errorObj, task.isLast);
+                if (obj) env->DeleteLocalRef(obj);
+                break;
+            }
+            case TASK_RSP_INSERT_ORDER:
+            {
+                CKSD_RspTraderInsertOrders* data = static_cast<CKSD_RspTraderInsertOrders*>(task.data);
+                jobject obj = newObject(env, javaObj_, "com/dimple/trade/struct/KsdRspTraderInsertOrders");
+                if (obj && data) {
+                    setStringField(env, obj, "localOrderNo", data->LocalOrderNo);
+                    setStringField(env, obj, "traderNo", data->TraderNo);
+                    setStringField(env, obj, "memberID", data->MemberID);
+                    setStringField(env, obj, "clientID", data->ClientID);
+                    setStringField(env, obj, "contractID", data->ContractID);
+                    setStringField(env, obj, "bsFlag", string(1, data->BsFlag).c_str());
+                    setStringField(env, obj, "eoFlag", string(1, data->EoFlag).c_str());
+                    setStringField(env, obj, "shFlag", string(1, data->ShFlag).c_str());
+                    setDoubleField(env, obj, "stopPrice", data->StopPrice);
+                    setDoubleField(env, obj, "price", data->Price);
+                    setLongField(env, obj, "qty", data->Qty);
+                    setStringField(env, obj, "orderType", string(1, data->OrderType).c_str());
+                    setStringField(env, obj, "orderAttr", string(1, data->OrderAttr).c_str());
+                    setStringField(env, obj, "orderTime", data->OrderTime);
+                    setStringField(env, obj, "actArbiContractID", data->ActArbiContractID);
+                    setStringField(env, obj, "tradePurpose", data->TradePurpose);
+                }
+                env->CallVoidMethod(javaObj_, midRspTraderInsertOrders, static_cast<jint>(task.seqNo), obj, errorObj, task.isLast);
+                if (obj) env->DeleteLocalRef(obj);
+                break;
+            }
+            case TASK_RTN_INSERT_ORDER: {
+                CKSD_RtnTraderInsertOrders* data = static_cast<CKSD_RtnTraderInsertOrders*>(task.data);
+                jobject obj = newObject(env, javaObj_, "com/dimple/trade/struct/KsdRtnTraderInsertOrders");
+                if (obj && data) {
+                    setStringField(env, obj, "sysOrderNo", data->SysOrderNo);
+                    setStringField(env, obj, "localOrderNo", data->LocalOrderNo);
+                    setStringField(env, obj, "traderNo", data->TraderNo);
+                    setStringField(env, obj, "memberID", data->MemberID);
+                    setStringField(env, obj, "clientID", data->ClientID);
+                    setStringField(env, obj, "contractID", data->ContractID);
+                    setStringField(env, obj, "exchCode", data->ExchCode);
+                    setStringField(env, obj, "bsFlag", string(1, data->BsFlag).c_str());
+                    setStringField(env, obj, "eoFlag", string(1, data->EoFlag).c_str());
+                    setStringField(env, obj, "shFlag", string(1, data->ShFlag).c_str());
+                    setDoubleField(env, obj, "price", data->Price);
+                    setLongField(env, obj, "qty", data->Qty);
+                    setStringField(env, obj, "orderType", string(1, data->OrderType).c_str());
+                    setStringField(env, obj, "orderAttr", string(1, data->OrderAttr).c_str());
+                    setStringField(env, obj, "orderTime", data->OrderTime);
+                    setLongField(env, obj, "orderBatchNo", data->OrderBatchNo);
+                    setStringField(env, obj, "tradeType", string(1, data->TradeType).c_str());
+                    setStringField(env, obj, "tradingDay", data->TradingDay);
+                    setStringField(env, obj, "status", data->Status);
+                    setStringField(env, obj, "actArbiContractID", data->ActArbiContractID);
+                    setLongField(env, obj, "remainAmt", data->RemainAmt);
+                    setStringField(env, obj, "type", string(1, data->Type).c_str());
+                    setStringField(env, obj, "tradePurpose", data->TradePurpose);
+                }
+                env->CallVoidMethod(javaObj_, midRtnTraderInsertOrders, static_cast<jint>(task.seqNo), obj, errorObj, task.isLast);
+                if (obj) env->DeleteLocalRef(obj);
+                break;
+            }
+            case TASK_RSP_QUIT_ORDER: {
+                CKSD_RspTraderQuitOrder* data = static_cast<CKSD_RspTraderQuitOrder*>(task.data);
+                jobject obj = newObject(env, javaObj_, "com/dimple/trade/struct/KsdRspTraderQuitOrder");
+                if (obj && data) {
+                    setStringField(env, obj, "traderNo", data->TraderNo);
+                    setStringField(env, obj, "memberID", data->MemberID);
+                    setStringField(env, obj, "clientID", data->ClientID);
+                    setLongField(env, obj, "orderBatchNo", data->OrderBatchNo);
+                    setStringField(env, obj, "contractID", data->ContractID);
+                    setStringField(env, obj, "cancelTraderNo", data->CancelTraderNo);
+                    setStringField(env, obj, "localOrderNo", data->LocalOrderNo);
+                    setStringField(env, obj, "sysOrderNo", data->SysOrderNo);
+                    setStringField(env, obj, "exchCode", data->ExchCode);
+                    setStringField(env, obj, "actionTime", data->ActionTime);
+                    setLongField(env, obj, "orderCancelQty", data->OrderCancelQty);
+                }
+                env->CallVoidMethod(javaObj_, midRspTraderQuitOrder, static_cast<jint>(task.seqNo), obj, errorObj, task.isLast);
+                if (obj) env->DeleteLocalRef(obj);
+                break;
+            }
+            case TASK_NTY_TRADER_MATCH: {
+                CKSD_NtyTraderMatch* data = static_cast<CKSD_NtyTraderMatch*>(task.data);
+                jobject obj = newObject(env, javaObj_, "com/dimple/trade/struct/KsdNtyTraderMatch");
+                if (obj && data) {
+                    setStringField(env, obj, "contractID", data->ContractID);
+                    setStringField(env, obj, "exchCode", data->ExchCode);
+                    setStringField(env, obj, "matchNo", data->MatchNo);
+                    setStringField(env, obj, "matchDate", data->MatchDate);
+                    setStringField(env, obj, "matchTime", data->MatchTime);
+                    setDoubleField(env, obj, "price", data->Price);
+                    setLongField(env, obj, "qty", data->Qty);
+                    setStringField(env, obj, "sysOrderNo", data->SysOrderNo);
+                    setStringField(env, obj, "traderNo", data->TraderNo);
+                    setStringField(env, obj, "bsFlag", string(1, data->BsFlag).c_str());
+                    setStringField(env, obj, "eoFlag", string(1, data->EoFlag).c_str());
+                    setStringField(env, obj, "shFlag", string(1, data->ShFlag).c_str());
+                    setStringField(env, obj, "memberID", data->MemberID);
+                    setStringField(env, obj, "clientID", data->ClientID);
+                    setStringField(env, obj, "localID", data->LocalID);
+                    setLongField(env, obj, "orderBatchNo", data->OrderBatchNo);
+                    setStringField(env, obj, "tradingRole", string(1, data->TradingRole).c_str());
+                    setStringField(env, obj, "actArbiContractID", data->ActArbiContractID);
+                    setStringField(env, obj, "midFlag", string(1, data->MidFlag).c_str());
+                    setStringField(env, obj, "tradePurpose", data->TradePurpose);
+                    setStringField(env, obj, "matchType", string(1, data->MatchType).c_str());
+                }
+                env->CallVoidMethod(javaObj_, midNtyTraderMatch, static_cast<jint>(task.seqNo), obj, task.isLast);
+                if (obj) env->DeleteLocalRef(obj);
+                break;
+            }
+        }
+
+        if (errorObj) {
+            env->DeleteLocalRef(errorObj);
+        }
+        task.clear();
+    }
+
+    env->DeleteLocalRef(apiClass);
+    jvm_->DetachCurrentThread();
+}
+
+static JniTradeApi* g_api = nullptr;
+
+extern "C" {
+
+JNIEXPORT void JNICALL Java_com_dimple_trade_KsdTradeApi_createKSDTradeApi(JNIEnv* env, jobject obj) {
+    JavaVM* jvm = nullptr;
+    env->GetJavaVM(&jvm);
+    if (!g_api) {
+        g_api = new JniTradeApi(jvm, obj);
+    }
+    g_api->createApi();
+}
+
+JNIEXPORT jint JNICALL Java_com_dimple_trade_KsdTradeApi_registerServer(JNIEnv* env, jobject, jstring ip, jint port) {
+    if (!g_api) {
+        return -1;
+    }
+    string nativeIp = getJString(env, ip);
+    return g_api->registerServer(const_cast<char*>(nativeIp.c_str()), port);
+}
+
+JNIEXPORT jint JNICALL Java_com_dimple_trade_KsdTradeApi_subscribePrivateFlow(JNIEnv*, jobject) {
+    return g_api ? g_api->subscribePrivateFlow() : -1;
+}
+
+JNIEXPORT jint JNICALL Java_com_dimple_trade_KsdTradeApi_subscribePublicFlow(JNIEnv*, jobject) {
+    return g_api ? g_api->subscribePublicFlow() : -1;
+}
+
+JNIEXPORT void JNICALL Java_com_dimple_trade_KsdTradeApi_init(JNIEnv*, jobject) {
+    if (g_api) {
+        g_api->init();
+    }
+}
+
+JNIEXPORT void JNICALL Java_com_dimple_trade_KsdTradeApi_join(JNIEnv*, jobject) {
+    if (g_api) {
+        g_api->join();
+    }
+}
+
+JNIEXPORT void JNICALL Java_com_dimple_trade_KsdTradeApi_release(JNIEnv*, jobject) {
+    if (g_api) {
+        g_api->release();
+    }
+}
+
+JNIEXPORT void JNICALL Java_com_dimple_trade_KsdTradeApi_exit(JNIEnv*, jobject) {
+    if (g_api) {
+        g_api->stopThread();
+        g_api->release();
+        delete g_api;
+        g_api = nullptr;
+    }
+}
+
+JNIEXPORT jint JNICALL Java_com_dimple_trade_KsdTradeApi_reqTraderLogin(JNIEnv* env, jobject, jobject reqObj) {
+    if (!g_api) {
+        return -1;
+    }
+    CKSD_ReqTradeLoginField req = {0};
+    copyToCharArray(req.TraderNo, sizeof(req.TraderNo), getObjectStringField(env, reqObj, "traderNo"));
+    copyToCharArray(req.Pwd, sizeof(req.Pwd), getObjectStringField(env, reqObj, "password"));
+    req.IfWithoutPwd = static_cast<unsigned char>(getObjectIntField(env, reqObj, "ifWithoutPwd"));
+    copyToCharArray(req.UmID, sizeof(req.UmID), getObjectStringField(env, reqObj, "umId"));
+    copyToCharArray(req.UmPwd, sizeof(req.UmPwd), getObjectStringField(env, reqObj, "umPwd"));
+    req.IfQuantify = static_cast<unsigned char>(getObjectIntField(env, reqObj, "ifQuantify"));
+    return g_api->reqTraderLogin(&req);
+}
+
+JNIEXPORT jint JNICALL Java_com_dimple_trade_KsdTradeApi_reqTraderEncLogin(JNIEnv* env, jobject, jobject reqObj) {
+    if (!g_api) {
+        return -1;
+    }
+    CKSD_ReqEncTradeLoginField req = {0};
+    copyToCharArray(req.TraderNo, sizeof(req.TraderNo), getObjectStringField(env, reqObj, "traderNo"));
+    copyToCharArray(req.Pwd, sizeof(req.Pwd), getObjectStringField(env, reqObj, "password"));
+    return g_api->reqTraderEncLogin(&req);
+}
+
+JNIEXPORT jint JNICALL Java_com_dimple_trade_KsdTradeApi_reqTraderLogout(JNIEnv* env, jobject, jstring traderNo) {
+    if (!g_api) {
+        return -1;
+    }
+    CKSD_ReqTradeLogoutField req = {0};
+    copyToCharArray(req.TraderNo, sizeof(req.TraderNo), getJString(env, traderNo));
+    return g_api->reqTraderLogout(&req);
+}
+
+JNIEXPORT jint JNICALL Java_com_dimple_trade_KsdTradeApi_reqTraderQryPosi(JNIEnv* env, jobject, jobject reqObj) {
+    if (!g_api) {
+        return -1;
+    }
+    unsigned int seqNo = 0;
+    CKSD_ReqTraderQryPosi req = {0};
+    copyToCharArray(req.TraderNo, sizeof(req.TraderNo), getObjectStringField(env, reqObj, "traderNo"));
+    return g_api->reqTraderQryPosi(&seqNo, &req);
+}
+
+JNIEXPORT jint JNICALL Java_com_dimple_trade_KsdTradeApi_reqTraderQryMoney(JNIEnv* env, jobject, jobject reqObj) {
+    if (!g_api) {
+        return -1;
+    }
+    unsigned int seqNo = 0;
+    CKSD_ReqTraderQryMoney req = {0};
+    copyToCharArray(req.ExchCode, sizeof(req.ExchCode), getObjectStringField(env, reqObj, "exchCode"));
+    copyToCharArray(req.MemberID, sizeof(req.MemberID), getObjectStringField(env, reqObj, "memberID"));
+    copyToCharArray(req.TraderNo, sizeof(req.TraderNo), getObjectStringField(env, reqObj, "traderNo"));
+    copyToCharArray(req.Currency, sizeof(req.Currency), getObjectStringField(env, reqObj, "currency"));
+    return g_api->reqTraderQryMoney(&seqNo, &req);
+}
+
+JNIEXPORT jint JNICALL Java_com_dimple_trade_KsdTradeApi_reqOrderAllQry(JNIEnv* env, jobject, jobject reqObj) {
+    if (!g_api) {
+        return -1;
+    }
+    unsigned int seqNo = 0;
+    CKSD_ReqOrderAllQry req = {0};
+    copyToCharArray(req.TraderNo, sizeof(req.TraderNo), getObjectStringField(env, reqObj, "traderNo"));
+    copyToCharArray(req.ContractId, sizeof(req.ContractId), getObjectStringField(env, reqObj, "contractId"));
+    string contractType = getObjectStringField(env, reqObj, "contractType");
+    req.ContractType = contractType.empty() ? 0 : contractType[0];
+    return g_api->reqOrderAllQry(&seqNo, &req);
+}
+
+JNIEXPORT jint JNICALL Java_com_dimple_trade_KsdTradeApi_reqTraderInsertOrders(JNIEnv* env, jobject, jobject reqObj) {
+    if (!g_api) {
+        return -1;
+    }
+    unsigned int seqNo = 0;
+    CKSD_ReqTraderInsertOrders req = {0};
+    copyToCharArray(req.LocalOrderNo, sizeof(req.LocalOrderNo), getObjectStringField(env, reqObj, "localOrderNo"));
+    copyToCharArray(req.TraderNo, sizeof(req.TraderNo), getObjectStringField(env, reqObj, "traderNo"));
+    copyToCharArray(req.MemberID, sizeof(req.MemberID), getObjectStringField(env, reqObj, "memberID"));
+    copyToCharArray(req.ClientID, sizeof(req.ClientID), getObjectStringField(env, reqObj, "clientID"));
+    copyToCharArray(req.ContractID, sizeof(req.ContractID), getObjectStringField(env, reqObj, "contractID"));
+    string bsFlag = getObjectStringField(env, reqObj, "bsFlag");
+    string eoFlag = getObjectStringField(env, reqObj, "eoFlag");
+    string shFlag = getObjectStringField(env, reqObj, "shFlag");
+    string orderType = getObjectStringField(env, reqObj, "orderType");
+    string orderAttr = getObjectStringField(env, reqObj, "orderAttr");
+    req.BsFlag = bsFlag.empty() ? 0 : bsFlag[0];
+    req.EoFlag = eoFlag.empty() ? 0 : eoFlag[0];
+    req.ShFlag = shFlag.empty() ? 0 : shFlag[0];
+    req.StopPrice = getObjectDoubleField(env, reqObj, "stopPrice");
+    req.Price = getObjectDoubleField(env, reqObj, "price");
+    req.Qty = static_cast<unsigned int>(getObjectLongField(env, reqObj, "qty"));
+    req.OrderType = orderType.empty() ? 0 : orderType[0];
+    req.OrderAttr = orderAttr.empty() ? 0 : orderAttr[0];
+    copyToCharArray(req.OrderTime, sizeof(req.OrderTime), getObjectStringField(env, reqObj, "orderTime"));
+    copyToCharArray(req.ActArbiContractID, sizeof(req.ActArbiContractID), getObjectStringField(env, reqObj, "actArbiContractID"));
+    copyToCharArray(req.TradePurpose, sizeof(req.TradePurpose), getObjectStringField(env, reqObj, "tradePurpose"));
+    return g_api->reqTraderInsertOrders(&seqNo, &req);
+}
+
+JNIEXPORT jint JNICALL Java_com_dimple_trade_KsdTradeApi_reqTraderQuitOrder(JNIEnv* env, jobject, jobject reqObj) {
+    if (!g_api) {
+        return -1;
+    }
+    unsigned int seqNo = 0;
+    CKSD_ReqTraderQuitOrder req = {0};
+    copyToCharArray(req.TraderNo, sizeof(req.TraderNo), getObjectStringField(env, reqObj, "traderNo"));
+    copyToCharArray(req.MemberID, sizeof(req.MemberID), getObjectStringField(env, reqObj, "memberID"));
+    copyToCharArray(req.ContractID, sizeof(req.ContractID), getObjectStringField(env, reqObj, "contractID"));
+    copyToCharArray(req.CancelTraderNo, sizeof(req.CancelTraderNo), getObjectStringField(env, reqObj, "cancelTraderNo"));
+    copyToCharArray(req.LocalOrderNo, sizeof(req.LocalOrderNo), getObjectStringField(env, reqObj, "localOrderNo"));
+    copyToCharArray(req.SysOrderNo, sizeof(req.SysOrderNo), getObjectStringField(env, reqObj, "sysOrderNo"));
+    return g_api->reqTraderQuitOrder(&seqNo, &req);
+}
+
+}
