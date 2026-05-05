@@ -28,3 +28,15 @@ if(UNIX)
 endif()
 
 target_link_libraries(dimple_trade_jni ${JNI_LIBRARIES} ${VENDOR_LIB})
+
+if(UNIX)
+    set(NATIVE_RESOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../resources/linux-x64")
+else()
+    set(NATIVE_RESOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../resources/win-x64")
+endif()
+
+add_custom_command(TARGET dimple_trade_jni POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E make_directory "${NATIVE_RESOURCE_DIR}"
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:dimple_trade_jni>" "${NATIVE_RESOURCE_DIR}/$<TARGET_FILE_NAME:dimple_trade_jni>"
+    COMMENT "Copying dimple_trade_jni native library to resources"
+)

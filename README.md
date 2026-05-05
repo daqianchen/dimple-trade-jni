@@ -32,8 +32,9 @@ Windows:
 cd src\main\cpp
 cmake -B build -S . -A x64
 cmake --build build --config Release
-Copy-Item build\Release\dimple_trade_jni.dll ..\resources\win-x64\
 ```
+
+构建成功后，CMake 会自动把 `dimple_trade_jni.dll` 复制到 `src/main/resources/win-x64/`，避免 Windows jar 漏掉 JNI 桥接库。
 
 Linux:
 
@@ -51,6 +52,12 @@ mvn clean package
 ```
 
 产物位于 `target/DimpleTradeApi-1.0.0.jar`。
+
+如果当前机器没有 Maven，也可以使用项目内脚本完成 Windows JNI 构建、资源检查和 jar 打包：
+
+```powershell
+.\scripts\build-windows-package.ps1
+```
 
 ## 运行说明
 

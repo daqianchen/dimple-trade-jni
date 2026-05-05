@@ -1,0 +1,33 @@
+name: Windows JNI Package
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Build JNI DLL and jar
+        shell: pwsh
+        run: .\scripts\build-windows-package.ps1 -JavaHome $env:JAVA_HOME
+
+      - name: Upload jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: DimpleTradeApi-1.0.0-windows
+          path: |
+            target/DimpleTradeApi-1.0.0.jar
+            src/main/resources/win-x64/dimple_trade_jni.dll

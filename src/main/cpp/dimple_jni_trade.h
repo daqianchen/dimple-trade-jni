@@ -2,6 +2,7 @@
 
 #include <jni.h>
 #include <condition_variable>
+#include <cstdlib>
 #include <cstring>
 #include <mutex>
 #include <queue>
