@@ -20,6 +20,10 @@ endif()
 
 add_library(dimple_trade_jni SHARED dimple_jni_trade.cpp dimple_jni_trade.h)
 
+if(MSVC)
+    target_compile_options(dimple_trade_jni PRIVATE /utf-8)
+endif()
+
 if(UNIX)
     set_target_properties(dimple_trade_jni PROPERTIES
         BUILD_WITH_INSTALL_RPATH TRUE

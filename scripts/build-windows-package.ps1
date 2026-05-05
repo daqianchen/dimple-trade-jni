@@ -21,18 +21,32 @@ if ([string]::IsNullOrWhiteSpace($JavaHome)) {
     }
 }
 
-if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
-    throw "cmake is required to build dimple_trade_jni.dll, but it was not found in PATH."
+$cmakeCommand = Get-Command cmake -ErrorAction SilentlyContinue
+if ($cmakeCommand) {
+    $cmakeExe = $cmakeCommand.Source
+} else {
+    $vsCmake = Get-ChildItem "D:\BuildTools\VS2022" -Recurse -Filter cmake.exe -ErrorAction SilentlyContinue |
+        Where-Object { $_.FullName -like "*\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe" } |
+        Select-Object -First 1
+    if (-not $vsCmake) {
+        throw "cmake is required to build dimple_trade_jni.dll, but it was not found in PATH or D:\BuildTools\VS2022."
+    }
+    $cmakeExe = $vsCmake.FullName
 }
 
 if (-not (Test-Path (Join-Path $JavaHome "bin\javac.exe"))) {
     throw "JDK not found: $JavaHome"
 }
 
+$cmakeJavaHome = $JavaHome.Replace('\', '/')
+$env:JAVA_HOME = $cmakeJavaHome
+$env:Path = (Join-Path $JavaHome "bin") + [System.IO.Path]::PathSeparator + $env:Path
+
 Push-Location $cppDir
 try {
-    cmake -B build -S . -A x64
-    cmake --build build --config Release
+    Remove-Item -Recurse -Force build -ErrorAction SilentlyContinue
+    & $cmakeExe -B build -S . -A x64 -DJAVA_HOME="$cmakeJavaHome"
+    & $cmakeExe --build build --config Release
 }
 finally {
     Pop-Location

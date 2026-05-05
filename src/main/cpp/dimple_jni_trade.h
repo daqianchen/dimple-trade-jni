@@ -12,7 +12,7 @@
 
 using namespace KingstardimpleTradeApi;
 
-// JNI 工作线程内部的任务类型。
+// Task types dispatched from SDK callback threads to the JNI worker.
 enum TaskType {
     TASK_EXIT = 0,
     TASK_FRONT_CONNECTED = 1,
@@ -29,7 +29,7 @@ enum TaskType {
     TASK_NTY_TRADER_MATCH = 12
 };
 
-// 从 C++ 回调线程投递到 JNI 工作线程的统一任务对象。
+// A copied SDK callback payload waiting to be converted to Java objects.
 struct Task {
     int type;
     void* data;
@@ -52,7 +52,6 @@ struct Task {
 template<typename T>
 class ConcurrentQueue {
 public:
-    // 生产者入队。
     void push(const T& value) {
         std::unique_lock<std::mutex> lock(mutex_);
         queue_.push(value);
@@ -60,7 +59,6 @@ public:
         condition_.notify_one();
     }
 
-    // 消费者阻塞式取队首任务。
     T waitAndPop() {
         std::unique_lock<std::mutex> lock(mutex_);
         while (queue_.empty()) {
@@ -77,10 +75,7 @@ private:
     std::condition_variable condition_;
 };
 
-// 交易 JNI 桥接对象，负责：
-// 1. 管理底层 CKSDTradeApi 生命周期
-// 2. 接收 C++ SPI 回调
-// 3. 转换为 Java 对象并回调到业务层
+// JNI bridge that owns CKSDTradeApi, receives SPI callbacks, and calls Java.
 class JniTradeApi : public CKSDTradeSpi {
 public:
     JniTradeApi(JavaVM* jvm, jobject javaObj);
