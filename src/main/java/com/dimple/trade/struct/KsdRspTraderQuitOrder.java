@@ -1,6 +1,9 @@
 package com.dimple.trade.struct;
 
+import lombok.Data;
+
 /** 撤单应答。 */
+@Data
 public class KsdRspTraderQuitOrder {
     public String traderNo;
     public String memberID;

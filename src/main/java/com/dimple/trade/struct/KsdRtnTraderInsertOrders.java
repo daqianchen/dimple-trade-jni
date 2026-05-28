@@ -1,6 +1,9 @@
 package com.dimple.trade.struct;
 
+import lombok.Data;
+
 /** 委托回报。 */
+@Data
 public class KsdRtnTraderInsertOrders {
     public String sysOrderNo;
     public String localOrderNo;

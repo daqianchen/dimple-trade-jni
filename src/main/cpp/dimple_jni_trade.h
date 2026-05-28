@@ -22,11 +22,13 @@ enum TaskType {
     TASK_RSP_LOGOUT = 5,
     TASK_RSP_QRY_POSI = 6,
     TASK_RSP_QRY_MONEY = 7,
-    TASK_RSP_ORDER_ALL = 8,
-    TASK_RSP_INSERT_ORDER = 9,
-    TASK_RTN_INSERT_ORDER = 10,
-    TASK_RSP_QUIT_ORDER = 11,
-    TASK_NTY_TRADER_MATCH = 12
+    TASK_RSP_POSI_ALL_QRY = 8,
+    TASK_RSP_QRY_STORAGE = 9,
+    TASK_RSP_ORDER_ALL = 10,
+    TASK_RSP_INSERT_ORDER = 11,
+    TASK_RTN_INSERT_ORDER = 12,
+    TASK_RSP_QUIT_ORDER = 13,
+    TASK_NTY_TRADER_MATCH = 14
 };
 
 // A copied SDK callback payload waiting to be converted to Java objects.
@@ -93,6 +95,8 @@ public:
     int reqTraderLogout(CKSD_ReqTradeLogoutField* req);
     int reqTraderQryPosi(unsigned int* seqNo, CKSD_ReqTraderQryPosi* req);
     int reqTraderQryMoney(unsigned int* seqNo, CKSD_ReqTraderQryMoney* req);
+    int reqTraderPosiAllQry(unsigned int* seqNo, CKSD_ReqTraderPosiAllQry* req);
+    int reqTraderQryStorage(unsigned int* seqNo, CKSD_ReqTraderQryStorage* req);
     int reqOrderAllQry(unsigned int* seqNo, CKSD_ReqOrderAllQry* req);
     int reqTraderInsertOrders(unsigned int* seqNo, CKSD_ReqTraderInsertOrders* req);
     int reqTraderQuitOrder(unsigned int* seqNo, CKSD_ReqTraderQuitOrder* req);
@@ -108,6 +112,8 @@ public:
     virtual void OnRspTraderLogout(const CKSD_RspInfoField* rspInfo, const CKSD_RspTradeLogoutField* data, bool isLast) override;
     virtual void OnRspTraderQryPosi(unsigned int seqNo, const CKSD_RspInfoField* rspInfo, const CKSD_RspTraderQryPosi* data, bool isLast) override;
     virtual void OnRspTraderQryMoney(unsigned int seqNo, const CKSD_RspInfoField* rspInfo, const CKSD_RspTraderQryMoney* data, bool isLast) override;
+    virtual void OnRspTraderPosiAllQry(unsigned int seqNo, const CKSD_RspInfoField* rspInfo, const CKSD_RspTraderPosiAllQry* data, bool isLast) override;
+    virtual void OnRspTraderQryStorage(unsigned int seqNo, const CKSD_RspInfoField* rspInfo, const CKSD_RspTraderQryStorage* data, bool isLast) override;
     virtual void OnRspOrderAllQry(unsigned int seqNo, const CKSD_RspInfoField* rspInfo, const CKSD_RspOrderAllQry* data, bool isLast) override;
     virtual void OnRspTraderInsertOrders(unsigned int seqNo, const CKSD_RspInfoField* rspInfo, const CKSD_RspTraderInsertOrders* data, bool isLast) override;
     virtual void OnRtnTraderInsertOrders(unsigned int seqNo, const CKSD_RspInfoField* rspInfo, const CKSD_RtnTraderInsertOrders* data, bool isLast) override;

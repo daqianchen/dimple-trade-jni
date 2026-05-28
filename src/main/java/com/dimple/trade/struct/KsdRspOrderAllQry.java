@@ -1,6 +1,9 @@
 package com.dimple.trade.struct;
 
+import lombok.Data;
+
 /** 委托汇总查询应答。 */
+@Data
 public class KsdRspOrderAllQry {
     public String memberID;
     public String clientID;

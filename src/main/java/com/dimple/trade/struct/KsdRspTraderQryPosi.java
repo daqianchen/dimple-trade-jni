@@ -1,6 +1,9 @@
 package com.dimple.trade.struct;
 
+import lombok.Data;
+
 /** 持仓查询应答。 */
+@Data
 public class KsdRspTraderQryPosi {
     public String memberID;
     public String clientID;

@@ -7,7 +7,9 @@ import com.dimple.trade.struct.KsdReqOrderAllQry;
 import com.dimple.trade.struct.KsdReqTradeLogin;
 import com.dimple.trade.struct.KsdReqTraderInsertOrders;
 import com.dimple.trade.struct.KsdReqTraderQryMoney;
+import com.dimple.trade.struct.KsdReqTraderQryStorage;
 import com.dimple.trade.struct.KsdReqTraderQryPosi;
+import com.dimple.trade.struct.KsdReqTraderPosiAllQry;
 import com.dimple.trade.struct.KsdReqTraderQuitOrder;
 import com.dimple.trade.struct.KsdRspInfo;
 import com.dimple.trade.struct.KsdRspOrderAllQry;
@@ -16,6 +18,8 @@ import com.dimple.trade.struct.KsdRspTradeLogout;
 import com.dimple.trade.struct.KsdRspTraderInsertOrders;
 import com.dimple.trade.struct.KsdRspTraderQryMoney;
 import com.dimple.trade.struct.KsdRspTraderQryPosi;
+import com.dimple.trade.struct.KsdRspTraderQryStorage;
+import com.dimple.trade.struct.KsdRspTraderPosiAllQry;
 import com.dimple.trade.struct.KsdRspTraderQuitOrder;
 import com.dimple.trade.struct.KsdRtnTraderInsertOrders;
 
@@ -69,6 +73,12 @@ public abstract class KsdTradeApi {
     /** 查询交易员资金/信用额度。 */
     public native int reqTraderQryMoney(KsdReqTraderQryMoney req);
 
+    /** 查询交易员持仓汇总。 */
+    public native int reqTraderPosiAllQry(KsdReqTraderPosiAllQry req);
+
+    /** 查询交易员库存。 */
+    public native int reqTraderQryStorage(KsdReqTraderQryStorage req);
+
     /** 查询委托汇总。 */
     public native int reqOrderAllQry(KsdReqOrderAllQry req);
 
@@ -104,6 +114,14 @@ public abstract class KsdTradeApi {
 
     /** 资金查询应答回调。 */
     public void onRspTraderQryMoney(int seqNo, KsdRspTraderQryMoney data, KsdRspInfo error, boolean isLast) {
+    }
+
+    /** 持仓汇总查询应答回调。 */
+    public void onRspTraderPosiAllQry(int seqNo, KsdRspTraderPosiAllQry data, KsdRspInfo error, boolean isLast) {
+    }
+
+    /** 库存查询应答回调。 */
+    public void onRspTraderQryStorage(int seqNo, KsdRspTraderQryStorage data, KsdRspInfo error, boolean isLast) {
     }
 
     /** 委托汇总查询应答回调。 */

@@ -2,10 +2,248 @@
 
 #include <algorithm>
 #include <cstdlib>
+#include <cstdio>
 #include <iostream>
 #include <string>
+#include <vector>
+
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 using std::string;
+
+// 交易 SDK 中文字段通常使用 GBK；固定 936 避免受系统 ACP 影响。
+static UINT sdkCodePage() {
+    static UINT cp = 0;
+    if (cp != 0) {
+        return cp;
+    }
+    const char* v = std::getenv("DIMPLE_JNI_CODEPAGE");
+    if (v && *v) {
+        char* end = nullptr;
+        unsigned long parsed = std::strtoul(v, &end, 10);
+        if (end != v && parsed > 0 && parsed <= 65535UL) {
+            cp = static_cast<UINT>(parsed);
+            return cp;
+        }
+    }
+    cp = 936;
+    return cp;
+}
+
+// 粗略判断字节序列是否是有效 UTF-8。
+static bool isLikelyUtf8(const char* value) {
+    if (!value) {
+        return false;
+    }
+    const unsigned char* s = reinterpret_cast<const unsigned char*>(value);
+    while (*s) {
+        if (*s <= 0x7F) {
+            ++s;
+            continue;
+        }
+        if ((*s & 0xE0) == 0xC0) {
+            if ((s[1] & 0xC0) != 0x80 || (*s & 0xFE) == 0xC0) {
+                return false;
+            }
+            s += 2;
+            continue;
+        }
+        if ((*s & 0xF0) == 0xE0) {
+            if ((s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80) {
+                return false;
+            }
+            if (*s == 0xE0 && s[1] < 0xA0) {
+                return false;
+            }
+            if (*s == 0xED && s[1] >= 0xA0) {
+                return false;
+            }
+            s += 3;
+            continue;
+        }
+        if ((*s & 0xF8) == 0xF0) {
+            if ((s[1] & 0xC0) != 0x80 || (s[2] & 0xC0) != 0x80 || (s[3] & 0xC0) != 0x80) {
+                return false;
+            }
+            if (*s == 0xF0 && s[1] < 0x90) {
+                return false;
+            }
+            if (*s > 0xF4 || (*s == 0xF4 && s[1] > 0x8F)) {
+                return false;
+            }
+            s += 4;
+            continue;
+        }
+        return false;
+    }
+    return true;
+}
+
+static bool charsetDebugEnabled() {
+    static int enabled = -1;
+    if (enabled == -1) {
+        const char* p = std::getenv("DIMPLE_JNI_CHARSET_DEBUG");
+        if (p && p[0] == '1') {
+            enabled = 1;
+            return true;
+        }
+        const char* v = std::getenv("DIMPLE_JNI_CHARSET_DEBUG");
+        enabled = (v && v[0] == '1') ? 1 : 0;
+    }
+    return enabled == 1;
+}
+
+static bool preferUtf8Decode() {
+    static int enabled = -1;
+    if (enabled == -1) {
+        const char* v = std::getenv("DIMPLE_JNI_PREFER_UTF8");
+        enabled = (!v || v[0] != '0') ? 1 : 0;
+    }
+    return enabled == 1;
+}
+
+static void logCharset(const char* msg) {
+    if (!charsetDebugEnabled() || !msg) {
+        return;
+    }
+#ifdef _WIN32
+    OutputDebugStringA(msg);
+#endif
+    std::fputs(msg, stderr);
+    std::fflush(stderr);
+}
+
+static void logBytesHex(const char* tag, const char* value, size_t maxBytes) {
+    if (!charsetDebugEnabled() || !value) {
+        return;
+    }
+    const unsigned char* p = reinterpret_cast<const unsigned char*>(value);
+    char buf[2048];
+    int n = std::snprintf(buf, sizeof(buf), "[jni-charset] %s bytes:", tag);
+    for (size_t i = 0; i < maxBytes && p[i] != 0 && n > 0 && n < static_cast<int>(sizeof(buf)) - 4; ++i) {
+        n += std::snprintf(buf + n, sizeof(buf) - n, " %02X", p[i]);
+    }
+    std::snprintf(buf + (n > 0 ? n : 0), sizeof(buf) - (n > 0 ? n : 0), "\n");
+    std::fputs(buf, stdout);
+    std::fflush(stdout);
+}
+
+// 将 SDK 本地编码字符串转换为 Java String。
+static jstring localCharsToJString(JNIEnv* env, const char* value) {
+    if (!value || value[0] == '\0') {
+        return env->NewStringUTF("");
+    }
+#ifdef _WIN32
+    logBytesHex("incoming", value, 96);
+    if (preferUtf8Decode() && isLikelyUtf8(value)) {
+        if (charsetDebugEnabled()) {
+            logCharset("[jni-charset] decode-path=UTF8(preferred)\n");
+        }
+        return env->NewStringUTF(value);
+    }
+    UINT cp = sdkCodePage();
+    if (charsetDebugEnabled()) {
+        char msg[128];
+        std::snprintf(msg, sizeof(msg), "[jni-charset] decode-path=CP(%u)\n", cp);
+        logCharset(msg);
+    }
+    int wideLen = MultiByteToWideChar(cp, 0, value, -1, nullptr, 0);
+    if (wideLen <= 0) {
+        // 回退系统代码页，兼容极少数非 GBK 环境。
+        wideLen = MultiByteToWideChar(CP_ACP, 0, value, -1, nullptr, 0);
+        if (wideLen <= 0) {
+            return env->NewStringUTF("");
+        }
+        std::vector<wchar_t> wideBuffer(static_cast<size_t>(wideLen));
+        MultiByteToWideChar(CP_ACP, 0, value, -1, wideBuffer.data(), wideLen);
+        return env->NewString(reinterpret_cast<const jchar*>(wideBuffer.data()), wideLen - 1);
+    }
+    std::vector<wchar_t> wideBuffer(static_cast<size_t>(wideLen));
+    MultiByteToWideChar(cp, 0, value, -1, wideBuffer.data(), wideLen);
+    return env->NewString(reinterpret_cast<const jchar*>(wideBuffer.data()), wideLen - 1);
+#else
+    return env->NewStringUTF(value);
+#endif
+}
+
+// 将 Java String 转换为 SDK 期望的本地编码字符串。
+static string jStringToLocalChars(JNIEnv* env, jstring value) {
+    if (!value) {
+        return "";
+    }
+#ifdef _WIN32
+    UINT cp = sdkCodePage();
+    if (charsetDebugEnabled()) {
+        char msg[128];
+        std::snprintf(msg, sizeof(msg), "[jni-charset] encode-path=CP(%u)\n", cp);
+        logCharset(msg);
+    }
+    const jchar* raw = env->GetStringChars(value, nullptr);
+    if (!raw) {
+        return "";
+    }
+    jsize jlen = env->GetStringLength(value);
+    int localLen = WideCharToMultiByte(
+            cp,
+            0,
+            reinterpret_cast<LPCWCH>(raw),
+            static_cast<int>(jlen),
+            nullptr,
+            0,
+            nullptr,
+            nullptr);
+    string result;
+    if (localLen > 0) {
+        result.resize(static_cast<size_t>(localLen));
+        WideCharToMultiByte(
+                cp,
+                0,
+                reinterpret_cast<LPCWCH>(raw),
+                static_cast<int>(jlen),
+                &result[0],
+                localLen,
+                nullptr,
+                nullptr);
+    } else {
+        // 回退系统代码页，尽量避免请求中文丢失。
+        localLen = WideCharToMultiByte(
+                CP_ACP,
+                0,
+                reinterpret_cast<LPCWCH>(raw),
+                static_cast<int>(jlen),
+                nullptr,
+                0,
+                nullptr,
+                nullptr);
+        if (localLen > 0) {
+            result.resize(static_cast<size_t>(localLen));
+            WideCharToMultiByte(
+                    CP_ACP,
+                    0,
+                    reinterpret_cast<LPCWCH>(raw),
+                    static_cast<int>(jlen),
+                    &result[0],
+                    localLen,
+                    nullptr,
+                    nullptr);
+        }
+    }
+    env->ReleaseStringChars(value, raw);
+    return result;
+#else
+    const char* chars = env->GetStringUTFChars(value, nullptr);
+    string result = chars ? chars : "";
+    if (chars) {
+        env->ReleaseStringUTFChars(value, chars);
+    }
+    return result;
+#endif
+}
 
 // 由于 SDK 回调数据通常由底层线程持有，这里做一份堆内存拷贝，
 // 交给 JNI 工作线程异步消费，避免回调返回后出现悬空指针。
@@ -61,17 +299,9 @@ static jclass loadClassInContext(JNIEnv* env, jobject apiInstance, const char* c
     return result;
 }
 
-// jstring -> std::string
+// jstring -> 本地编码 string
 static string getJString(JNIEnv* env, jstring value) {
-    if (!value) {
-        return "";
-    }
-    const char* chars = env->GetStringUTFChars(value, nullptr);
-    string result = chars ? chars : "";
-    if (chars) {
-        env->ReleaseStringUTFChars(value, chars);
-    }
-    return result;
+    return jStringToLocalChars(env, value);
 }
 
 // 从 Java 对象中读取 String 字段。
@@ -127,7 +357,7 @@ static void copyToCharArray(char* target, size_t size, const string& value) {
 static void setStringField(JNIEnv* env, jobject object, const char* name, const char* value) {
     jclass cls = env->GetObjectClass(object);
     jfieldID field = env->GetFieldID(cls, name, "Ljava/lang/String;");
-    jstring text = env->NewStringUTF(value ? value : "");
+    jstring text = localCharsToJString(env, value);
     env->SetObjectField(object, field, text);
     env->DeleteLocalRef(text);
     env->DeleteLocalRef(cls);
@@ -275,6 +505,14 @@ int JniTradeApi::reqTraderQryMoney(unsigned int* seqNo, CKSD_ReqTraderQryMoney* 
     return api_ ? api_->ReqTraderQryMoney(seqNo, req) : -1;
 }
 
+int JniTradeApi::reqTraderPosiAllQry(unsigned int* seqNo, CKSD_ReqTraderPosiAllQry* req) {
+    return api_ ? api_->ReqTraderPosiAllQry(seqNo, req) : -1;
+}
+
+int JniTradeApi::reqTraderQryStorage(unsigned int* seqNo, CKSD_ReqTraderQryStorage* req) {
+    return api_ ? api_->ReqTraderQryStorage(seqNo, req) : -1;
+}
+
 int JniTradeApi::reqOrderAllQry(unsigned int* seqNo, CKSD_ReqOrderAllQry* req) {
     return api_ ? api_->ReqOrderAllQry(seqNo, req) : -1;
 }
@@ -343,6 +581,16 @@ void JniTradeApi::OnRspTraderQryMoney(unsigned int seqNo, const CKSD_RspInfoFiel
     queue_.push(task);
 }
 
+void JniTradeApi::OnRspTraderPosiAllQry(unsigned int seqNo, const CKSD_RspInfoField* rspInfo, const CKSD_RspTraderPosiAllQry* data, bool isLast) {
+    Task task = {TASK_RSP_POSI_ALL_QRY, copyData(data), copyData(rspInfo), seqNo, isLast};
+    queue_.push(task);
+}
+
+void JniTradeApi::OnRspTraderQryStorage(unsigned int seqNo, const CKSD_RspInfoField* rspInfo, const CKSD_RspTraderQryStorage* data, bool isLast) {
+    Task task = {TASK_RSP_QRY_STORAGE, copyData(data), copyData(rspInfo), seqNo, isLast};
+    queue_.push(task);
+}
+
 void JniTradeApi::OnRspOrderAllQry(unsigned int seqNo, const CKSD_RspInfoField* rspInfo, const CKSD_RspOrderAllQry* data, bool isLast) {
     Task task = {TASK_RSP_ORDER_ALL, copyData(data), copyData(rspInfo), seqNo, isLast};
     queue_.push(task);
@@ -381,6 +629,8 @@ void JniTradeApi::processTask() {
     jmethodID midRspTraderLogout = env->GetMethodID(apiClass, "onRspTraderLogout", "(Lcom/dimple/trade/struct/KsdRspTradeLogout;Lcom/dimple/trade/struct/KsdRspInfo;Z)V");
     jmethodID midRspTraderQryPosi = env->GetMethodID(apiClass, "onRspTraderQryPosi", "(ILcom/dimple/trade/struct/KsdRspTraderQryPosi;Lcom/dimple/trade/struct/KsdRspInfo;Z)V");
     jmethodID midRspTraderQryMoney = env->GetMethodID(apiClass, "onRspTraderQryMoney", "(ILcom/dimple/trade/struct/KsdRspTraderQryMoney;Lcom/dimple/trade/struct/KsdRspInfo;Z)V");
+    jmethodID midRspTraderPosiAllQry = env->GetMethodID(apiClass, "onRspTraderPosiAllQry", "(ILcom/dimple/trade/struct/KsdRspTraderPosiAllQry;Lcom/dimple/trade/struct/KsdRspInfo;Z)V");
+    jmethodID midRspTraderQryStorage = env->GetMethodID(apiClass, "onRspTraderQryStorage", "(ILcom/dimple/trade/struct/KsdRspTraderQryStorage;Lcom/dimple/trade/struct/KsdRspInfo;Z)V");
     jmethodID midRspOrderAllQry = env->GetMethodID(apiClass, "onRspOrderAllQry", "(ILcom/dimple/trade/struct/KsdRspOrderAllQry;Lcom/dimple/trade/struct/KsdRspInfo;Z)V");
     jmethodID midRspTraderInsertOrders = env->GetMethodID(apiClass, "onRspTraderInsertOrders", "(ILcom/dimple/trade/struct/KsdRspTraderInsertOrders;Lcom/dimple/trade/struct/KsdRspInfo;Z)V");
     jmethodID midRtnTraderInsertOrders = env->GetMethodID(apiClass, "onRtnTraderInsertOrders", "(ILcom/dimple/trade/struct/KsdRtnTraderInsertOrders;Lcom/dimple/trade/struct/KsdRspInfo;Z)V");
@@ -485,6 +735,60 @@ void JniTradeApi::processTask() {
                     setDoubleField(env, obj, "offsetProfitLoss", data->OffsetProfitLoss);
                 }
                 env->CallVoidMethod(javaObj_, midRspTraderQryMoney, static_cast<jint>(task.seqNo), obj, errorObj, task.isLast);
+                if (obj) env->DeleteLocalRef(obj);
+                break;
+            }
+            case TASK_RSP_POSI_ALL_QRY: {
+                CKSD_RspTraderPosiAllQry* data = static_cast<CKSD_RspTraderPosiAllQry*>(task.data);
+                jobject obj = newObject(env, javaObj_, "com/dimple/trade/struct/KsdRspTraderPosiAllQry");
+                if (obj && data) {
+                    setStringField(env, obj, "memberID", data->MemberID);
+                    setStringField(env, obj, "clientID", data->ClientID);
+                    setStringField(env, obj, "traderNo", data->TraderNo);
+                    setStringField(env, obj, "actArbiContractId", data->ActArbiContractId);
+                    setStringField(env, obj, "contractID", data->ContractID);
+                    setStringField(env, obj, "bsFlag", string(1, data->BsFlag).c_str());
+                    setStringField(env, obj, "shFlag", string(1, data->ShFlag).c_str());
+                    setLongField(env, obj, "lastQty", data->LastQty);
+                    setLongField(env, obj, "qty", data->Qty);
+                    setLongField(env, obj, "offsetQty", data->OffsetQty);
+                    setLongField(env, obj, "offsetLastQty", data->OffsetLastQty);
+                    setLongField(env, obj, "offsetTodayQty", data->OffsetTodayQty);
+                    setDoubleField(env, obj, "exposure", data->Exposure);
+                    setDoubleField(env, obj, "amt", data->Amt);
+                    setDoubleField(env, obj, "margin", data->Margin);
+                    setDoubleField(env, obj, "avePrice", data->AvePrice);
+                    setDoubleField(env, obj, "lastPrice", data->LastPrice);
+                    setDoubleField(env, obj, "profitFund", data->ProfitFund);
+                    setDoubleField(env, obj, "floatProfitLoss", data->FloatProfitLoss);
+                    setDoubleField(env, obj, "profitLossTodayFloating", data->ProfitLossTodayFloating);
+                    setDoubleField(env, obj, "profitLossTotal", data->ProfitLossTotal);
+                    setStringField(env, obj, "tradePurpose", data->TradePurpose);
+                }
+                env->CallVoidMethod(javaObj_, midRspTraderPosiAllQry, static_cast<jint>(task.seqNo), obj, errorObj, task.isLast);
+                if (obj) env->DeleteLocalRef(obj);
+                break;
+            }
+            case TASK_RSP_QRY_STORAGE: {
+                CKSD_RspTraderQryStorage* data = static_cast<CKSD_RspTraderQryStorage*>(task.data);
+                jobject obj = newObject(env, javaObj_, "com/dimple/trade/struct/KsdRspTraderQryStorage");
+                if (obj && data) {
+                    setStringField(env, obj, "traderNo", data->TraderNo);
+                    setStringField(env, obj, "memberID", data->MemberID);
+                    setStringField(env, obj, "contractID", data->ContractID);
+                    setStringField(env, obj, "varietyID", data->VarietyID);
+                    setStringField(env, obj, "varietyName", data->VarietyName);
+                    setDoubleField(env, obj, "totalStorage", data->TotalStorage);
+                    setDoubleField(env, obj, "availableStorage", data->AvailableStorage);
+                    setDoubleField(env, obj, "frozenStorage", data->FrozenStorage);
+                    setDoubleField(env, obj, "pendStorage", data->PendStorage);
+                    setDoubleField(env, obj, "impawnStorage", data->ImpawnStorage);
+                    setDoubleField(env, obj, "lawFrozen", data->LawFrozen);
+                    setStringField(env, obj, "tradePurpose", data->TradePurpose);
+                    setDoubleField(env, obj, "setoffFrozen", data->SetoffFrozen);
+                    setDoubleField(env, obj, "transferFrozen", data->TransferFrozen);
+                }
+                env->CallVoidMethod(javaObj_, midRspTraderQryStorage, static_cast<jint>(task.seqNo), obj, errorObj, task.isLast);
                 if (obj) env->DeleteLocalRef(obj);
                 break;
             }
@@ -644,6 +948,10 @@ JNIEXPORT void JNICALL Java_com_dimple_trade_KsdTradeApi_createKSDTradeApi(JNIEn
     JavaVM* jvm = nullptr;
     env->GetJavaVM(&jvm);
     if (!g_api) {
+        char msg[192];
+        std::snprintf(msg, sizeof(msg), "[jni-charset] init codepage=%u preferUtf8=%d debug=%d\n",
+                      sdkCodePage(), preferUtf8Decode() ? 1 : 0, charsetDebugEnabled() ? 1 : 0);
+        logCharset(msg);
         g_api = new JniTradeApi(jvm, obj);
     }
     g_api->createApi();
@@ -747,6 +1055,32 @@ JNIEXPORT jint JNICALL Java_com_dimple_trade_KsdTradeApi_reqTraderQryMoney(JNIEn
     copyToCharArray(req.TraderNo, sizeof(req.TraderNo), getObjectStringField(env, reqObj, "traderNo"));
     copyToCharArray(req.Currency, sizeof(req.Currency), getObjectStringField(env, reqObj, "currency"));
     return g_api->reqTraderQryMoney(&seqNo, &req);
+}
+
+JNIEXPORT jint JNICALL Java_com_dimple_trade_KsdTradeApi_reqTraderPosiAllQry(JNIEnv* env, jobject, jobject reqObj) {
+    if (!g_api) {
+        return -1;
+    }
+    unsigned int seqNo = 0;
+    CKSD_ReqTraderPosiAllQry req = {0};
+    copyToCharArray(req.MemberID, sizeof(req.MemberID), getObjectStringField(env, reqObj, "memberID"));
+    copyToCharArray(req.TraderNo, sizeof(req.TraderNo), getObjectStringField(env, reqObj, "traderNo"));
+    copyToCharArray(req.ContractId, sizeof(req.ContractId), getObjectStringField(env, reqObj, "contractId"));
+    string contractType = getObjectStringField(env, reqObj, "contractType");
+    req.ContractType = contractType.empty() ? 0 : contractType[0];
+    copyToCharArray(req.ActArbiContractID, sizeof(req.ActArbiContractID), getObjectStringField(env, reqObj, "actArbiContractID"));
+    copyToCharArray(req.TradePurpose, sizeof(req.TradePurpose), getObjectStringField(env, reqObj, "tradePurpose"));
+    return g_api->reqTraderPosiAllQry(&seqNo, &req);
+}
+
+JNIEXPORT jint JNICALL Java_com_dimple_trade_KsdTradeApi_reqTraderQryStorage(JNIEnv* env, jobject, jobject reqObj) {
+    if (!g_api) {
+        return -1;
+    }
+    unsigned int seqNo = 0;
+    CKSD_ReqTraderQryStorage req = {0};
+    copyToCharArray(req.TraderNo, sizeof(req.TraderNo), getObjectStringField(env, reqObj, "traderNo"));
+    return g_api->reqTraderQryStorage(&seqNo, &req);
 }
 
 JNIEXPORT jint JNICALL Java_com_dimple_trade_KsdTradeApi_reqOrderAllQry(JNIEnv* env, jobject, jobject reqObj) {

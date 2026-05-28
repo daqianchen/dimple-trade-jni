@@ -26,6 +26,7 @@ public final class LibraryLoader {
         try {
             String os = System.getProperty("os.name", "").toLowerCase();
             File nativeDir = resolveNativeDir();
+            System.out.println("[dimple-jni] os=" + os + ", nativeDir=" + nativeDir.getAbsolutePath());
 
             if (os.contains("win")) {
                 loadWindows(nativeDir);
@@ -47,8 +48,11 @@ public final class LibraryLoader {
         File trade = extractOrResolve(nativeDir, "KSDTradeApi.dll", "/win-x64/KSDTradeApi.dll", false);
         File jni = extractOrResolve(nativeDir, "dimple_trade_jni.dll", "/win-x64/dimple_trade_jni.dll", true);
 
+        System.out.println("[dimple-jni] loading " + crypto.getAbsolutePath());
         System.load(crypto.getAbsolutePath());
+        System.out.println("[dimple-jni] loading " + trade.getAbsolutePath());
         System.load(trade.getAbsolutePath());
+        System.out.println("[dimple-jni] loading " + jni.getAbsolutePath());
         System.load(jni.getAbsolutePath());
     }
 
@@ -80,12 +84,9 @@ public final class LibraryLoader {
         return nativeDir;
     }
 
-    /** 如果目标文件不存在，则从 jar 资源中提取。 */
+    /** 从 jar 资源中提取并覆盖目标文件，避免复用旧版本 native 库。 */
     private static File extractOrResolve(File dir, String fileName, String resourcePath, boolean required) throws IOException {
         File preferred = new File(dir, fileName);
-        if (preferred.exists() && preferred.length() > 0) {
-            return preferred;
-        }
 
         InputStream in = LibraryLoader.class.getResourceAsStream(resourcePath);
         if (in == null) {
@@ -103,6 +104,7 @@ public final class LibraryLoader {
                 output.write(buffer, 0, read);
             }
         }
+        System.out.println("[dimple-jni] extracted " + resourcePath + " -> " + preferred.getAbsolutePath() + " (" + preferred.length() + " bytes)");
         return preferred;
     }
 

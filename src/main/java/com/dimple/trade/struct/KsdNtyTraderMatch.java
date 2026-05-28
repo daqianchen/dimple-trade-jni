@@ -1,6 +1,9 @@
 package com.dimple.trade.struct;
 
+import lombok.Data;
+
 /** 成交通知。 */
+@Data
 public class KsdNtyTraderMatch {
     public String contractID;
     public String exchCode;
